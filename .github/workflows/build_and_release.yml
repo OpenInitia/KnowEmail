@@ -1,0 +1,210 @@
+name: Build and Release
+
+on:
+  push:
+    paths:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ steps.tag_version.outputs.new_tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate new version
+        id: tag_version
+        run: |
+          # Fetch all tags
+          git fetch --tags
+          
+          # Get the latest tag, default to v1.0.0 if none
+          # We silence stderr to avoid confusion if no tags exist
+          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Current version: $latest_tag"
+          
+          # Remove 'v' prefix
+          version=${latest_tag#v}
+          
+          # Split into array by dot
+          IFS='.' read -r -a parts <<< "$version"
+          
+          # Ensure major.minor.patch structure
+          if [ ${#parts[@]} -lt 3 ]; then
+             parts=(1 0 0)
+          fi
+          
+          major=${parts[0]}
+          minor=${parts[1]}
+          patch=${parts[2]}
+          
+          # Increment patch version
+          new_patch=$((patch + 1))
+          
+          new_tag="v$major.$minor.$new_patch"
+          echo "New version: $new_tag"
+          echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
+
+      - name: Push new tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.tag_version.outputs.new_tag }}
+          git push origin ${{ steps.tag_version.outputs.new_tag }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag_version.outputs.new_tag }}
+          name: Release ${{ steps.tag_version.outputs.new_tag }}
+          draft: false
+          prerelease: false
+
+  build:
+    needs: create-tag
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            TARGET: windows
+          - os: ubuntu-latest
+            TARGET: linux
+          - os: macos-latest
+            TARGET: macos
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-tag.outputs.new_tag }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # --- Windows Build ---
+      - name: Build Windows
+        if: matrix.os == 'windows-latest'
+        run: |
+          pyinstaller --name "KnowEmail" --onefile --windowed --icon "favicon.ico" --add-data "src;src" --add-data "lib;lib" main.py
+          mv dist/KnowEmail.exe dist/KnowEmail-${{ needs.create-tag.outputs.new_tag }}-windows.exe
+
+      # --- Linux Build ---
+      - name: Build Linux
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          # Use colon for separator on Linux
+          pyinstaller --name "KnowEmail" --onefile --windowed --icon "favicon.ico" --add-data "src:src" --add-data "lib:lib" main.py
+
+      - name: Package Linux (AppImage & Deb)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          TAG_NAME="${{ needs.create-tag.outputs.new_tag }}"
+          # Remove 'v' for deb version
+          VERSION_NUM=${TAG_NAME#v}
+          
+          # Create AppDir structure for AppImage and Deb
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          
+          # Copy binary
+          cp dist/KnowEmail AppDir/usr/bin/knowemail
+          chmod +x AppDir/usr/bin/knowemail
+          
+          # Copy icon
+          cp favicon.ico AppDir/knowemail.png
+          cp favicon.ico AppDir/usr/share/icons/hicolor/256x256/apps/knowemail.png
+          
+          # Create Desktop file
+          cat > AppDir/usr/share/applications/knowemail.desktop <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=KnowEmail
+          Exec=knowemail
+          Icon=knowemail
+          Categories=Utility;
+          EOF
+          
+          # Copy desktop file to root of AppDir for AppImage
+          cp AppDir/usr/share/applications/knowemail.desktop AppDir/knowemail.desktop
+          cp AppDir/knowemail.png AppDir/.DirIcon
+
+          # --- AppImage ---
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          
+          # Run linuxdeploy
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage
+          
+          # Move and Rename AppImage
+          mv KnowEmail-*.AppImage dist/KnowEmail-${TAG_NAME}-linux.AppImage
+
+          # --- Deb ---
+          # Install fpm
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev rubygems build-essential
+          sudo gem install --no-document fpm
+          
+          fpm -s dir -t deb \
+            -n knowemail \
+            -v ${VERSION_NUM} \
+            -p dist/KnowEmail-${TAG_NAME}-linux.deb \
+            --prefix / \
+            -C AppDir
+
+      # --- macOS Build ---
+      - name: Build macOS
+        if: matrix.os == 'macos-latest'
+        run: |
+          # Use colon for separator on macOS
+          pyinstaller --name "KnowEmail" --windowed --icon "favicon.ico" --add-data "src:src" --add-data "lib:lib" main.py
+          
+          # Check dist content
+          ls -R dist/
+
+          # Prepare Version Name
+          TAG_NAME="${{ needs.create-tag.outputs.new_tag }}"
+          
+          # Zip the .app for release
+          cd dist
+          zip -r KnowEmail-${TAG_NAME}-macos.app.zip KnowEmail.app
+          cd ..
+
+          # Create DMG
+          npm install -g create-dmg
+          create-dmg dist/KnowEmail.app dist || true
+          
+          # Rename DMG if needed, create-dmg usually names it 'KnowEmail 1.0.0.dmg' or similar based on plist
+          # We force a rename to match our convention
+          mv dist/*.dmg dist/KnowEmail-${TAG_NAME}-macos.dmg
+
+      - name: Upload Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.create-tag.outputs.new_tag }}
+          files: |
+            dist/KnowEmail-*-windows.exe
+            dist/KnowEmail-*-linux.AppImage
+            dist/KnowEmail-*-linux.deb
+            dist/KnowEmail-*-macos.dmg
+            dist/KnowEmail-*-macos.app.zip
