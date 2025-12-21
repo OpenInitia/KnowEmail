@@ -81,11 +81,12 @@ python3 main.py
 *Tip:* Customize the script or integrate additional checks as needed for your specific application.
 
 ## Download Options
-### Windows Users:
-The current release of KnowEmail is available as an executable (.exe) for Windows users only. Download the latest Windows executable from the Releases page. [Download Here](https://github.com/OpenInitia/KnowEmail/releases)
-
-### Future Support:
-We are actively working on packages for macOS, Linux, and Android. Stay tuned for updates!
+We provide ready-to-use executables for Windows, macOS, and Linux. You can download the latest version from the [Releases Page](https://github.com/OpenInitia/KnowEmail/releases).
+| Platform | Format |
+|----------|--------|
+| **Windows** | `.exe` |
+| **macOS** | `.dmg`, `.app` |
+| **Linux** | `.AppImage`, `.deb` |
 
 ## Contributing
 
