@@ -88,6 +88,29 @@ class ResultDialog(QtWidgets.QDialog):
         help_dialog.setStandardButtons(QtWidgets.QMessageBox.Ok)
         help_dialog.exec_()
 
+import concurrent.futures
+
+class SingleVerificationWorker(QtCore.QObject):
+    finished = QtCore.pyqtSignal(str, bool)
+
+    def __init__(self, email):
+        super().__init__()
+        self.email = email
+
+    def run(self):
+        try:
+            domain = self.email.split('@')[1]
+            if not has_mx_record(domain):
+                self.finished.emit("Domain does not have MX records", False)
+                return
+
+            if not verify_email_smtp(self.email):
+                self.finished.emit("SMTP verification failed! Email is not valid.", False)
+            else:
+                self.finished.emit("Email is valid and appears to be reachable", True)
+        except Exception as e:
+            self.finished.emit(f"Error: {str(e)}", False)
+
 class BulkVerificationThread(QtCore.QThread):
     result_signal = QtCore.pyqtSignal(str, str)
     all_done = QtCore.pyqtSignal()
@@ -95,26 +118,45 @@ class BulkVerificationThread(QtCore.QThread):
     def __init__(self, emails):
         super().__init__()
         self.emails = emails
+        self.is_running = True
         
     def run(self):
-        for email in self.emails:
-            if not email:
-                continue
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_email = {executor.submit(self.verify_single_email, email): email for email in self.emails if email}
+            
+            for future in concurrent.futures.as_completed(future_to_email):
+                if not self.is_running:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+                    
+                email = future_to_email[future]
+                try:
+                    status = future.result()
+                except Exception as e:
+                    status = f"Error: {str(e)}"
                 
-            try:
-                if not is_valid_email_syntax(email):
-                    status = "Invalid (Syntax)"
-                elif not has_mx_record(email.split('@')[1]):
-                    status = "Invalid (No MX)"
-                elif not verify_email_smtp(email):
-                    status = "Invalid (SMTP)"
-                else:
-                    status = "Valid"
-            except Exception as e:
-                status = f"Error: {str(e)}"
+                self.result_signal.emit(email, status)
                 
-            self.result_signal.emit(email, status)
-        self.all_done.emit()  # Signal completion after all emails
+        self.all_done.emit()
+
+    def verify_single_email(self, email):
+        try:
+            if not is_valid_email_syntax(email):
+                return "Invalid (Syntax)"
+            
+            domain = email.split('@')[1]
+            if not has_mx_record(domain):
+                return "Invalid (No MX)"
+            
+            if not verify_email_smtp(email):
+                return "Invalid (SMTP)"
+            
+            return "Valid"
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+    def stop(self):
+        self.is_running = False
 
 class EmailValidatorApp(QtWidgets.QWidget):
     def __init__(self):
@@ -124,7 +166,8 @@ class EmailValidatorApp(QtWidgets.QWidget):
         self.verifying_timer = QtCore.QTimer()
         self.verifying_counter = 1
         self.verifying_timer.timeout.connect(self.update_verifying_text)
-        self.verification_thread = None
+        self.bulk_thread = None
+        self.single_worker_thread = None
 
     def init_ui(self):
         self.setWindowTitle("KnowEmail")
@@ -232,10 +275,14 @@ class EmailValidatorApp(QtWidgets.QWidget):
         self.results_dialog.show()
         
         # Start verification in background
-        self.verification_thread = BulkVerificationThread(emails)
-        self.verification_thread.result_signal.connect(self.update_results)
-        self.verification_thread.all_done.connect(self.show_completion_popup)  # Add this
-        self.verification_thread.start()
+        if self.bulk_thread and self.bulk_thread.isRunning():
+             self.bulk_thread.stop()
+             self.bulk_thread.wait()
+
+        self.bulk_thread = BulkVerificationThread(emails)
+        self.bulk_thread.result_signal.connect(self.update_results)
+        self.bulk_thread.all_done.connect(self.show_completion_popup)
+        self.bulk_thread.start()
 
     def show_completion_popup(self):
         QtWidgets.QMessageBox.information(
@@ -266,25 +313,38 @@ class EmailValidatorApp(QtWidgets.QWidget):
         if not is_valid_email_syntax(email):
             QtWidgets.QMessageBox.warning(self, "Error", "Invalid email syntax")
             return
+            
         self.verifying_counter = 1
         self.verifying_timer.start(500)
         self.result_label.setText("Verifying...")
-        QtCore.QTimer.singleShot(100, lambda: self.verify_in_background(email))
+        self.validate_button.setEnabled(False)
+        self.email_input.setEnabled(False)
+
+        # Create worker and thread for async execution
+        self.single_worker_thread = QtCore.QThread()
+        self.worker = SingleVerificationWorker(email)
+        self.worker.moveToThread(self.single_worker_thread)
+        
+        # Connect signals
+        self.single_worker_thread.started.connect(self.worker.run)
+        self.worker.finished.connect(self.handle_single_verification_result)
+        self.worker.finished.connect(self.single_worker_thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.single_worker_thread.finished.connect(self.single_worker_thread.deleteLater)
+        
+        self.single_worker_thread.start()
+
+    def handle_single_verification_result(self, message, is_valid):
+        self.verifying_timer.stop()
+        self.result_label.setText("")
+        self.validate_button.setEnabled(True)
+        self.email_input.setEnabled(True)
+        
+        self.show_popup(message)
 
     def verify_in_background(self, email):
-        domain = email.split('@')[1]
-        if not has_mx_record(domain):
-            self.show_popup("Domain does not have MX records")
-            return
-        try:
-            if not verify_email_smtp(email):
-                self.show_popup("SMTP verification failed! Email is not valid.")
-            else:
-                self.show_popup("Email is valid and appears to be reachable")
-        except Exception as e:
-            self.show_popup(f"Error: {str(e)}")
-        finally:
-            self.verifying_timer.stop()
+        # Deprecated: Logic moved to SingleVerificationWorker
+        pass
 
     def show_popup(self, message):
         self.verifying_timer.stop()

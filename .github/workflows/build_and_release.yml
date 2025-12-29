@@ -62,11 +62,28 @@ jobs:
           git tag ${{ steps.tag_version.outputs.new_tag }}
           git push origin ${{ steps.tag_version.outputs.new_tag }}
 
+      - name: Generate Release Notes
+        id: release_notes
+        run: |
+          # Get the last tag before the new one we just created
+          previous_tag=$(git describe --tags --abbrev=0 ${{ steps.tag_version.outputs.new_tag }}^ 2>/dev/null || echo "")
+          
+          if [ -z "$previous_tag" ]; then
+            # If no previous tag, get log from the beginning
+            git log --pretty=format:"- %s" > release_notes.txt
+          else
+            # Get log from previous tag to new tag
+            git log ${previous_tag}..HEAD --pretty=format:"- %s" > release_notes.txt
+          fi
+          
+          cat release_notes.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.tag_version.outputs.new_tag }}
           name: Release ${{ steps.tag_version.outputs.new_tag }}
+          body_path: release_notes.txt
           draft: false
           prerelease: false
 
