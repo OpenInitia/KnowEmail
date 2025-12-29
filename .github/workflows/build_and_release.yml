@@ -151,14 +151,16 @@ jobs:
           cp AppDir/knowemail.png AppDir/.DirIcon
 
           # --- AppImage ---
-          # --- AppImage ---
+          sudo apt-get update
+          sudo apt-get install -y qtbase5-dev qtchooser qt5-qmake qtbase5-dev-tools
+          
           wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
           chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
           
           # Run linuxdeploy with Qt plugin
-          # We export the plugin path just in case, though usually it finds it in CWD
           export PATH=$(pwd):$PATH
+          export QMAKE=/usr/lib/qt5/bin/qmake
           ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage
           
           # Move and Rename AppImage
