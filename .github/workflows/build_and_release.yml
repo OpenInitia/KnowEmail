@@ -79,8 +79,6 @@ jobs:
         include:
           - os: windows-latest
             TARGET: windows
-          - os: ubuntu-latest
-            TARGET: linux
           - os: macos-latest
             TARGET: macos
 
@@ -109,69 +107,7 @@ jobs:
           pyinstaller --name "KnowEmail" --onefile --windowed --icon "favicon.ico" --add-data "src;src" --add-data "lib;lib" main.py
           mv dist/KnowEmail.exe dist/KnowEmail-${{ needs.create-tag.outputs.new_tag }}-windows.exe
 
-      # --- Linux Build ---
-      - name: Build Linux
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          # Use colon for separator on Linux
-          pyinstaller --name "KnowEmail" --onefile --windowed --icon "favicon.ico" --add-data "src:src" --add-data "lib:lib" main.py
 
-      - name: Package Linux (AppImage & Deb)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          TAG_NAME="${{ needs.create-tag.outputs.new_tag }}"
-          # Remove 'v' for deb version
-          VERSION_NUM=${TAG_NAME#v}
-          
-          # Create AppDir structure for AppImage and Deb
-          mkdir -p AppDir/usr/bin
-          mkdir -p AppDir/usr/share/applications
-          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-          
-          # Copy binary
-          cp dist/KnowEmail AppDir/usr/bin/knowemail
-          chmod +x AppDir/usr/bin/knowemail
-          
-          # Copy icon
-          cp favicon.ico AppDir/knowemail.png
-          cp favicon.ico AppDir/usr/share/icons/hicolor/256x256/apps/knowemail.png
-          
-          # Create Desktop file
-          cat > AppDir/usr/share/applications/knowemail.desktop <<EOF
-          [Desktop Entry]
-          Type=Application
-          Name=KnowEmail
-          Exec=knowemail
-          Icon=knowemail
-          Categories=Utility;
-          EOF
-          
-          # Copy desktop file to root of AppDir for AppImage
-          cp AppDir/usr/share/applications/knowemail.desktop AppDir/knowemail.desktop
-          cp AppDir/knowemail.png AppDir/.DirIcon
-
-          # --- AppImage ---
-          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          chmod +x linuxdeploy-x86_64.AppImage
-          
-          # Run linuxdeploy
-          ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage
-          
-          # Move and Rename AppImage
-          mv KnowEmail-*.AppImage dist/KnowEmail-${TAG_NAME}-linux.AppImage
-
-          # --- Deb ---
-          # Install fpm
-          sudo apt-get update
-          sudo apt-get install -y ruby ruby-dev rubygems build-essential
-          sudo gem install --no-document fpm
-          
-          fpm -s dir -t deb \
-            -n knowemail \
-            -v ${VERSION_NUM} \
-            -p dist/KnowEmail-${TAG_NAME}-linux.deb \
-            --prefix / \
-            -C AppDir
 
       # --- macOS Build ---
       - name: Build macOS
@@ -205,7 +141,5 @@ jobs:
           tag_name: ${{ needs.create-tag.outputs.new_tag }}
           files: |
             dist/KnowEmail-*-windows.exe
-            dist/KnowEmail-*-linux.AppImage
-            dist/KnowEmail-*-linux.deb
             dist/KnowEmail-*-macos.dmg
             dist/KnowEmail-*-macos.app.zip
