@@ -1,4 +1,10 @@
 import sys
+import os
+
+# Force XCB on Linux to prevent crashes on Wayland or missing plugin issues
+if sys.platform.startswith('linux'):
+    os.environ['QT_QPA_PLATFORM'] = 'xcb'
+
 from src.gui import EmailValidatorApp
 from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtWidgets import *
